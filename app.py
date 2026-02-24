@@ -350,5 +350,5 @@ with st.expander("Suggested next steps for production"):
 2. Add scheduled ingestion jobs and store normalized records in PostgreSQL/Snowflake.
 3. Implement SSO (Okta/Azure AD) and business-unit level access controls.
 4. Add daily Teams/email alerts for permits nearing expiration.
-""
+"""
     )
