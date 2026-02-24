@@ -193,22 +193,22 @@ if tx_url:
             frames.append(fetch_remote_permits(tx_url, "TX"))
         except Exception as exc:  # noqa: BLE001
             issues.append(f"Texas fetch failed: {exc}")
-    else:
-        issues.append("Texas source URL is empty.")
+        else:
+            issues.append("Texas source URL is empty.")
 
 if la_url:
         try:
             frames.append(fetch_remote_permits(la_url, "LA"))
         except Exception as exc:  # noqa: BLE001
             issues.append(f"Louisiana fetch failed: {exc}")
-    else:
-        issues.append("Louisiana source URL is empty.")
+        else:
+            issues.append("Louisiana source URL is empty.")
 
 if not frames:
         return (pd.DataFrame(columns=REQUIRED_COLUMNS), issues)
 
-    data = pd.concat(frames, ignore_index=True)
-    return (data, issues)
+        data = pd.concat(frames, ignore_index=True)
+        return (data, issues)
 
 
 st.title("Texas + Louisiana Drilling Permit Tracker")
