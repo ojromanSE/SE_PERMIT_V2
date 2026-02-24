@@ -22,6 +22,9 @@ REQUIRED_COLUMNS = [
     "expiration_date",
 ]
 
+# Public export endpoints can be overridden in Streamlit secrets.
+DEFAULT_TX_RRC_EXPORT = "https://rrcsearch3.neubus.com/esd3-rrc/api/permit/drilling/export.csv"
+DEFAULT_LA_SONRIS_EXPORT = "https://sonlite.dnr.state.la.us/sundown/cart_prod/cart_drillpermit.csv"
 SOURCE_DEFAULTS = {
     "tx_url": "",
     "la_url": "",
@@ -140,6 +143,7 @@ def _response_to_dataframe(content: bytes, content_type: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60 * 60)
 def fetch_remote_permits(url: str, state: str) -> pd.DataFrame:
+    resp = requests.get(url, timeout=60)
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     content_type = resp.headers.get("Content-Type", "").lower()
@@ -162,6 +166,28 @@ def load_live_data(tx_url: str, la_url: str) -> tuple[pd.DataFrame, list[str]]:
     frames: list[pd.DataFrame] = []
     issues: list[str] = []
 
+    for state, url in [("TX", tx_url), ("LA", la_url)]:
+        if not url:
+            issues.append(f"{state} source URL is empty.")
+            continue
+        try:
+            frames.append(fetch_remote_permits(url, state))
+        except Exception as exc:  # noqa: BLE001
+            issues.append(f"{state} fetch failed: {exc}")
+
+    if not frames:
+        return pd.DataFrame(columns=REQUIRED_COLUMNS), issues
+
+    data = pd.concat(frames, ignore_index=True)
+    return data, issues
+
+
+st.title("Texas + Louisiana Drilling Permit Tracker")
+st.caption("Automatic RRC/SONRIS pulls + upload fallback for drilling permit surveillance.")
+
+secrets_defaults = st.secrets.get("permit_sources", {}) if hasattr(st, "secrets") else {}
+tx_default = secrets_defaults.get("tx_rrc_export_url", DEFAULT_TX_RRC_EXPORT)
+la_default = secrets_defaults.get("la_sonris_export_url", DEFAULT_LA_SONRIS_EXPORT)
     if tx_url:
         try:
             frames.append(fetch_remote_permits(tx_url, "TX"))
@@ -195,6 +221,10 @@ with st.sidebar:
     st.header("Data source")
     mode = st.radio("Select mode", ["Live source pull", "Upload CSV", "Sample data"], index=0)
 
+    tx_url = st.text_input("Texas RRC export URL", value=tx_default)
+    la_url = st.text_input("Louisiana SONRIS export URL", value=la_default)
+    st.caption("Store these in Streamlit secrets under [permit_sources] for unattended refresh.")
+    refresh = st.button("Refresh live data")
     secrets_defaults = st.secrets.get("permit_sources", {}) if hasattr(st, "secrets") else {}
     tx_default = secrets_defaults.get("tx_url", SOURCE_DEFAULTS["tx_url"])
     la_default = secrets_defaults.get("la_url", SOURCE_DEFAULTS["la_url"])
@@ -223,6 +253,7 @@ else:
 for issue in issues:
     st.warning(issue)
 
+data = normalize_dates(data)
 valid, missing_cols = validate_dataframe(data)
 if not valid:
     st.error(
@@ -239,6 +270,11 @@ today = pd.Timestamp.today().normalize()
 data["days_to_expiry"] = (data["expiration_date"] - today).dt.days
 
 st.subheader("Portfolio at a glance")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total permits", len(data))
+col2.metric("Pending", int((data["status"].astype(str).str.lower() == "pending").sum()))
+col3.metric("Approved", int((data["status"].astype(str).str.lower() == "approved").sum()))
+col4.metric("Expiring <= 60 days", int((data["days_to_expiry"] <= 60).sum()))
 metric_1, metric_2, metric_3, metric_4 = st.columns(4)
 metric_1.metric("Total permits", len(data))
 metric_2.metric("Pending", int((data["status"].astype(str).str.lower() == "pending").sum()))
@@ -249,6 +285,7 @@ with st.sidebar:
     st.header("Filters")
     states = st.multiselect("State", sorted(data["state"].dropna().astype(str).unique()), default=sorted(data["state"].dropna().astype(str).unique()))
     statuses = st.multiselect("Status", sorted(data["status"].dropna().astype(str).unique()), default=sorted(data["status"].dropna().astype(str).unique()))
+    operators = st.multiselect("Operator", sorted(data["operator"].dropna().astype(str).unique()), default=sorted(data["operator"].dropna().astype(str).unique()))
     operators = st.multiselect(
         "Operator",
         sorted(data["operator"].dropna().astype(str).unique()),
@@ -262,6 +299,7 @@ filtered = data[
     & data["operator"].astype(str).isin(operators)
 ].copy()
 
+left, right = st.columns(2)
 left, right = st.columns([1, 1])
 
 with left:
@@ -269,12 +307,26 @@ with left:
     if filtered.empty:
         st.info("No records match current filters.")
     else:
+        st.plotly_chart(px.histogram(filtered, x="state", color="status", barmode="group"), use_container_width=True)
         status_fig = px.histogram(filtered, x="state", color="status", barmode="group", title="Status Distribution")
         st.plotly_chart(status_fig, use_container_width=True)
 
 with right:
     st.subheader("Permits nearing expiration")
     expiring = filtered[filtered["days_to_expiry"] <= days_limit].sort_values("days_to_expiry")
+    st.dataframe(expiring[["permit_id", "state", "operator", "county_parish", "status", "expiration_date", "days_to_expiry"]], use_container_width=True, hide_index=True)
+
+st.subheader("Detailed permit list")
+st.dataframe(filtered.sort_values(["state", "operator", "expiration_date"]), use_container_width=True, hide_index=True)
+st.download_button("Download filtered permits as CSV", data=filtered.to_csv(index=False).encode("utf-8"), file_name="filtered_permits.csv", mime="text/csv")
+
+with st.expander("Operational notes"):
+    st.markdown(
+        """
+- Direct source URLs are loaded from `.streamlit/secrets.toml` keys:
+  - `permit_sources.tx_rrc_export_url`
+  - `permit_sources.la_sonris_export_url`
+- Use `ingest_job.py` in a scheduler (cron/GitHub Actions/Cloud Run Job) to persist normalized rows into PostgreSQL or Snowflake.
     st.dataframe(
         expiring[["permit_id", "state", "operator", "county_parish", "status", "expiration_date", "days_to_expiry"]],
         use_container_width=True,
