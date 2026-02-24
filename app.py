@@ -188,7 +188,7 @@ st.caption("Automatic RRC/SONRIS pulls + upload fallback for drilling permit sur
 secrets_defaults = st.secrets.get("permit_sources", {}) if hasattr(st, "secrets") else {}
 tx_default = secrets_defaults.get("tx_rrc_export_url", DEFAULT_TX_RRC_EXPORT)
 la_default = secrets_defaults.get("la_sonris_export_url", DEFAULT_LA_SONRIS_EXPORT)
-    if tx_url:
+if tx_url:
         try:
             frames.append(fetch_remote_permits(tx_url, "TX"))
         except Exception as exc:  # noqa: BLE001
@@ -196,7 +196,7 @@ la_default = secrets_defaults.get("la_sonris_export_url", DEFAULT_LA_SONRIS_EXPO
     else:
         issues.append("Texas source URL is empty.")
 
-    if la_url:
+if la_url:
         try:
             frames.append(fetch_remote_permits(la_url, "LA"))
         except Exception as exc:  # noqa: BLE001
@@ -204,7 +204,7 @@ la_default = secrets_defaults.get("la_sonris_export_url", DEFAULT_LA_SONRIS_EXPO
     else:
         issues.append("Louisiana source URL is empty.")
 
-    if not frames:
+if not frames:
         return (pd.DataFrame(columns=REQUIRED_COLUMNS), issues)
 
     data = pd.concat(frames, ignore_index=True)
